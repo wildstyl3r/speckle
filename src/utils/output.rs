@@ -30,9 +30,16 @@ pub fn make_pictures(
     let padded_w = width + 2 * padding;
     let padded_hw = padded_h * padded_w;
 
+    let pixel_max = Tensor::full(
+        [b, padded_hw],
+        f64::NEG_INFINITY,
+        (Kind::Float, scores.device()),
+    )
+    .internal_scatter_reduce(1, flat_coords, &scores.view([b, npp]), "amax", true);
     //[b,n,p*p]
-    let batch_max = scores.amax(-1, true);
-    let exp_scores = (scores - batch_max).exp().view([b, npp]);
+    let exp_scores = (&scores.view([b, npp]) - &pixel_max.gather(1, flat_coords, false))
+        .exp()
+        .view([b, npp]); //batch_max).exp().view([b, npp]);
 
     //[b,n*p*p,c]
     let weighted_values = patches.reshape([b, npp, channels]) * &exp_scores.unsqueeze(-1);
@@ -64,13 +71,10 @@ pub fn make_pictures(
         .view([b, padded_h, padded_w, channels])
         .narrow(1, padding, height)
         .narrow(2, padding, width),
-        (Tensor::ones(
-            [b, padded_h * padded_w, 1],
-            (numerator.kind(), numerator.device()),
-        ) / denominator.view([b, padded_hw, 1]))
-        .view([b, padded_h, padded_w, 1])
-        .narrow(1, padding, height)
-        .narrow(2, padding, width),
+        (pixel_max.unsqueeze(-1) / denominator.view([b, padded_hw, 1]))
+            .view([b, padded_h, padded_w, 1])
+            .narrow(1, padding, height)
+            .narrow(2, padding, width),
         mask_has_data
             .view([b, padded_h, padded_w])
             .narrow(1, padding, height)

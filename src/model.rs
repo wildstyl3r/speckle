@@ -6,7 +6,10 @@ pub mod swiglu;
 
 use crate::{
     model::{block::Block, fourier_pe::PositionEncoder},
-    utils::{flat_to_2d, output::patch_coords},
+    utils::{
+        flat_to_2d,
+        output::{make_pictures, patch_coords},
+    },
 };
 use thiserror::Error;
 
@@ -59,6 +62,9 @@ pub struct ModelConfig {
     #[arg(long, default_value_t = 3)]
     pub image_channels: i64,
 
+    #[arg(long = "rlf", default_value_t = 0.1)]
+    pub reconstruction_loss_factor: f64,
+
     #[serde(skip)]
     #[arg(skip)]
     pub max_image_side: i64,
@@ -94,6 +100,7 @@ pub struct Model {
     final_norm: norm::Norm,
     pixel_modeling_head: nn::Linear,
     pub patch_side: i64,
+    reconstruction_loss_factor: f64,
 }
 
 impl Model {
@@ -140,6 +147,7 @@ impl Model {
             ),
             residual,
             patch_side: config.patch_side,
+            reconstruction_loss_factor: config.reconstruction_loss_factor,
         })
     }
 
@@ -211,20 +219,35 @@ impl Model {
             .gather(-1, &flat_coords, false)
             .view([b, n, self.patch_side * self.patch_side]);
 
-        let loss = (patch_mask.unsqueeze(-1)
+        let (prediction, _, generated_pixels_mask) = make_pictures(
+            &patch_coords(&flat_to_2d(sx, w), self.patch_side, w),
+            &mu,
+            &-&logvar,
+            self.patch_side,
+            (h, w, c),
+        );
+
+        let reconstruction_loss = ((prediction - target).square()
+            * generated_pixels_mask.unsqueeze(-1))
+        .mean(tch::Kind::Float);
+
+        let patchwise_nll_loss = (patch_mask.unsqueeze(-1)
             * ((patch_targets - mu).square() * (-logvar.unsqueeze(-1)).exp()
                 + logvar.unsqueeze(-1)))
         .mean(tch::Kind::Float);
+
+        let loss = patchwise_nll_loss * (1. - self.reconstruction_loss_factor)
+            + reconstruction_loss * self.reconstruction_loss_factor;
         (loss, raw_predictions)
     }
 
     fn forward_t(&self, context: &Tensor, positions: &Tensor, train: bool) -> Tensor {
         //[b,context,c]
-        let context = {
-            //pseudo-inverse for logistic sigmoid
-            let k = context * 2 - 1;
-            (&k + k.pow_tensor_scalar(5)) * 2
-        };
+        // let context = {
+        //     //pseudo-inverse for logistic sigmoid
+        //     let k = context * 2 - 1;
+        //     (&k + k.pow_tensor_scalar(5)) * 2
+        // };
         let xs: Tensor = self.pixel_encoder.forward(&context);
         let ps: Tensor = self.pos_encoder.forward(positions);
         let mut xs = Tensor::cat(&[ps, xs], -1);

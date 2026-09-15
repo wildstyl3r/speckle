@@ -1,0 +1,5 @@
+torch>=2.4
+safetensors
+pyarrow
+pillow
+numpy
