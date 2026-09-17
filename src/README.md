@@ -1,0 +1,4 @@
+# Speckle
+Images are obviously redundant data sources. Remove a random half of the pixels and you'll still be able to understand what's going on. Maybe even 75% (https://arxiv.org/abs/2111.06377). So arises a direct path to self-supervised pretraining on images, where a random sample of its pixels is considered to be the context. But what shuld be the target? There was a suggestion of another random sample from the same image (https://arxiv.org/pdf/2103.15813). But it was an encoder-decoder architecture, how to make a pure decoder?
+
+The model is focused on predicting sets of color distributions, corresponding to pixels of patches, centered at given context pixels, blending the result patches from multiple context pixels via pixelwise inverse-variance weighting. The work is currently in progress.
