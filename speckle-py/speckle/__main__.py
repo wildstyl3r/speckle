@@ -49,11 +49,12 @@ def train(args, device: torch.device) -> None:
 
     train_data, val_data = train_val_split(images, config.dataset.train_share)
 
-    train_batcher = Batcher(train_data, config.model.batch_size)
-    val_batcher = Batcher(val_data, config.model.batch_size)
+    base_seed = getattr(args, "seed", 1337)
+    train_batcher = Batcher(train_data, config.model.batch_size, seed=base_seed)
+    val_batcher = Batcher(val_data, config.model.batch_size, seed=base_seed + 1)
     visualization_classes = [256]
-    train_vis_batcher = Batcher(train_data, config.model.eval_batch_size)
-    val_vis_batcher = Batcher(val_data, config.model.eval_batch_size)
+    train_vis_batcher = Batcher(train_data, config.model.eval_batch_size, seed=base_seed + 2)
+    val_vis_batcher = Batcher(val_data, config.model.eval_batch_size, seed=base_seed + 3)
 
     model_creation_start = time.time()
     config.model.max_image_side = max(h, w)
@@ -124,7 +125,8 @@ def train(args, device: torch.device) -> None:
                 * (1.0 + math.cos(math.pi * step / total_steps))
             )
             n = int(density * (h * w))
-            sx = sx[:, :n]
+            sx = sx[:, :n].to(device)
+            target = target.to(device)
             loss, _ = model.forward_with_loss(sx, target, True)
             (loss / config.accumulation_steps).backward()
             if step % config.accumulation_steps == 0:
@@ -152,7 +154,12 @@ def eval_checkpoint(args, device: torch.device) -> None:
 
 
 def vis(args, device: torch.device) -> None:
-    cfg = DatasetConfig(train_share=args.train_share, dataset=args.dataset)
+    max_images = getattr(args, "max_images", None)
+    cfg = DatasetConfig(
+        train_share=args.train_share,
+        dataset=args.dataset,
+        max_images=-1 if max_images is None else max_images,
+    )
     images = dataset.employ(cfg, True)
     img = visualize_source_points(images, args.seed, args.source_points)
     out_path = f"vis_sample{args.seed}.png"

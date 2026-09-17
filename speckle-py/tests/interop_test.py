@@ -12,8 +12,8 @@ from speckle.model import Model
 from speckle.utils.info import param_count
 from speckle.__main__ import load_safetensors
 
-RUST_CKPT = Path(
-    "../../Programming/Rust/speckle/checkpoints/run_20260913_1929_-dirty_ff-cifar-b3-h4"
+RUST_CKPT = Path(__file__).resolve().parents[2] / (
+    "checkpoints/run_20260913_1929_-dirty_ff-cifar-b3-h4"
 )
 EXPECTED_VAL = -3.5280861854553223
 EXPECTED_TRAIN = -3.57356333732605

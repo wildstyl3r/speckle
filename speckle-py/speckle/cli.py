@@ -36,6 +36,7 @@ OVERRIDE_MAP = {
     "num_heads": ("model.block.attention", "num_heads"),
     "qk_norm": ("model.block.attention", "qk_norm"),
     "train_share": ("dataset", "train_share"),
+    "max_images": ("dataset", "max_images"),
     "dataset": ("dataset", "dataset"),
 }
 
@@ -66,6 +67,7 @@ def add_train_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--num-heads", type=int, default=None)
     p.add_argument("--qk-norm", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--train-share", type=float, default=None)
+    p.add_argument("--max-images", type=int, default=None)
     p.add_argument("--dataset", default=None, choices=DATASETS)
 
 
@@ -97,6 +99,7 @@ def parse_args(argv=None):
     vi = sub.add_parser("vis", help="visualize source point selection")
     vi.add_argument("--dataset", default="Mnist", choices=DATASETS)
     vi.add_argument("--train-share", type=float, default=0.9)
+    vi.add_argument("--max-images", type=int, default=None)
     vi.add_argument("--source-points", type=int, default=192)
 
     return p.parse_args(argv)

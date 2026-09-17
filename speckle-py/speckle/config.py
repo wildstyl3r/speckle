@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-DATASETS = ("SplitLine", "SmoothedSplitLine", "Mnist", "Cifar10")
+DATASETS = ("SplitLine", "SmoothedSplitLine", "Mnist", "Cifar10", "Stl10Unlabeled")
 DECAY_MODES = ("Cosine", "Linear")
 NORM_OPTIONS = ("LayerNorm", "RMSNorm")
 RESIDUAL_OPTIONS = ("Plain", "Attentive")
@@ -88,6 +88,7 @@ class ModelConfig:
 class DatasetConfig:
     train_share: float = 0.9
     dataset: str = "Mnist"
+    max_images: int = -1
 
     def __post_init__(self):
         _check_enum(self.dataset, DATASETS, "dataset")
@@ -162,6 +163,7 @@ class TrainConfig:
         lines.append("")
         lines.append("[dataset]")
         lines.append(f"train_share = {_fmt(self.dataset.train_share)}")
+        lines.append(f"max_images = {_fmt(self.dataset.max_images)}")
         lines.append(f'dataset = "{self.dataset.dataset}"')
         return "\n".join(lines) + "\n"
 

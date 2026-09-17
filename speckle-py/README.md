@@ -13,7 +13,7 @@ names, so Rust and Python artifacts are interoperable.
 
 ## Environment
 
-Developed against the venv at `../.env` (torch 2.7.1+rocm6.3, safetensors, pyarrow, pillow, numpy). CPU is the default device;
+Developed against the venv at `$PYENV` (torch 2.7.1+rocm6.3, safetensors, pyarrow, pillow, numpy). CPU is the default device;
 pass `--device cuda` to override. The `data/` directory is a symlink to the Rust
 project's cache (shared parquet downloads); replace it freely.
 
@@ -28,6 +28,10 @@ $PY -m speckle train --config my.toml --tag mytag
 # train with CLI overrides (any config field; kebab-case flags like the Rust CLI)
 $PY -m speckle train --dataset SplitLine --emb-dim 32 --n-blocks 1 --qk-norm \
     --norm RMSNorm --max-iters 101 --eval-interval 50 --tag smoke
+
+# train on the STL-10 unlabeled pool (100k 96x96 RGB; cap it for quick runs)
+$PY -m speckle train --dataset Stl10Unlabeled --max-images 2000 --batch-size 4 \
+    --starting-density 0.25 --ending-density 0.05 --device cuda --tag stl
 
 # inspect a checkpoint (Rust- or Python-produced)
 $PY -m speckle eval checkpoints/run_20260914_2148_py_smoke
@@ -77,10 +81,37 @@ $PY tests/interop_test.py   # load Rust checkpoint, numeric cross-check vs its l
 - `vis` mode writes a PNG instead of opening a winit/softbuffer window.
 - Timing strings in `losses.csv`/stdout are Python-formatted seconds (`12.34s`).
 - RNG streams differ (same seeds, same algorithms, not bit-identical runs).
-- `Batcher` stores the fixed per-image pixel permutations as int32 in chunks
-  (Rust materializes one int64 tensor); same distribution, half the RAM.
+- `Batcher` no longer materializes per-image pixel permutations at all (Rust builds one
+  int64 N x h*w table, earlier this port stored int32 chunks); permutations are now
+  generated lazily per batch from a dedicated generator — see below.
 - Only `SplitLine` synthetic generation is implemented; `SmoothedSplitLine` raises
   `NotImplementedError`, matching the `todo!()` in Rust.
+- **Datasets are decoded to uint8** (`[0, 255]`); `Batcher` converts each batch to
+  float32 `[0, 1]` (bit-identical to the previous decode-time `/255`). Cuts the 100k
+  STL-10 pool from ~11 GB to ~2.8 GB. `SplitLine.generate` now emits uint8 too.
+- **`Batcher` generates pixel permutations lazily per batch** from a dedicated
+  `torch.Generator` (seeded by `--seed` in `train()`, offset per batcher) instead of
+  pre-generating the whole N x h*w permutation table. Same distribution, same
+  deterministic batches for a given seed, ~0 steady-state cost (the old table needed
+  ~3.3 GB per 100k-image 96x96 batcher).
+- **`DatasetConfig.max_images`** (default -1 = all): deterministic first-N subsample
+  cap, applied in `employ()`; the multi-shard loader also stops downloading/decoding
+  early. Emitted into `config.toml`; the Rust loader ignores the unknown key, but Rust
+  itself has no `Stl10Unlabeled` enum value, so STL-10 configs are Python-only.
+- **`Stl10Unlabeled`**: the `unlabeled` split (100k 96x96 RGB) of
+  `huggingface.co/datasets/jxie/stl10`, downloaded as 4 parquet shards with HTTP-Range
+  resume + retries, decoded to `data/train/stl10_unlabeled[_<cap>|_full].npy` so the
+  one-time PIL decode never repeats. There is no test split; the val pool comes from
+  `train_val_split` over the same pool.
+- **Batches are moved to the compute device** in `train()`/eval/vis paths (previously
+  they stayed on CPU, so `--device cuda` crashed).
+- The eval-loss loop **recycles an exhausted Batcher** instead of returning a partial
+  average (matters only when the pool is smaller than `eval_iters * batch_size`, e.g.
+  capped STL-10 runs); identical behavior for large pools.
+- `vis`'s source-point mask is per-pixel (the old per-channel mask crashed
+  `tensor_to_rgba` for RGB datasets).
+- Test files locate the Rust checkpoint configs relative to the test file instead of
+  the historical hardcoded `../../Programming/...` cwd.
 
 See `NOTES.md` for open questions to discuss (patch-centering offset semantics,
 pixelwise-softmax max-subtraction subtlety in `make_pictures`).

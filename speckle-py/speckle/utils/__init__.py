@@ -15,12 +15,17 @@ def loss_to_double(config, batcher: Batcher, m, class_sizes) -> float:
     with torch.no_grad():
         pred = []
         limit = sum(class_sizes)
+        device = next(m.parameters()).device
         for _ in range(config.eval_iters):
             batch = batcher.next()
             if batch is None:
-                break
+                batcher.current_index = 0
+                batch = batcher.next()
+                if batch is None:
+                    break
             sx, target = batch
-            sx = sx[:, :limit]
+            sx = sx[:, :limit].to(device)
+            target = target.to(device)
             loss, _ = m.forward_with_loss(sx, target, False)
             pred.append(loss)
         return float(torch.stack(pred).mean())

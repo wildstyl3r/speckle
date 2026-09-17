@@ -3,3 +3,5 @@ __pycache__/
 data/
 checkpoints/
 .venv/
+.env
+jupyter_config_*.toml

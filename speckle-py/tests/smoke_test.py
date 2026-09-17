@@ -1,12 +1,19 @@
+import io
 import math
+import os
 import sys
 import tempfile
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import torch
+from PIL import Image
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import speckle.dataset as dataset
 from speckle.batcher import Batcher
 from speckle.config import TrainConfig
 from speckle.model import Model
@@ -181,9 +188,8 @@ def test_toml_roundtrip():
         assert "[model.block.attention]" in text
         assert 'residual = "Attentive"' in text
 
-    rust_cfg = Path(
-        "../../Programming/Rust/speckle/checkpoints/"
-        "run_20260913_1929_-dirty_ff-cifar-b3-h4/config.toml"
+    rust_cfg = Path(__file__).resolve().parents[2] / (
+        "checkpoints/run_20260913_1929_-dirty_ff-cifar-b3-h4/config.toml"
     )
     loaded = TrainConfig.load(rust_cfg)
     assert loaded.model.emb_dim == 64
@@ -194,9 +200,8 @@ def test_toml_roundtrip():
     assert loaded.model.patch_side == 5
     assert loaded.dataset.dataset == "Cifar10"
 
-    old_cfg = Path(
-        "../../Programming/Rust/speckle/checkpoints/"
-        "run_20260910_0028_-dirty_sl-h4-b1/config.toml"
+    old_cfg = Path(__file__).resolve().parents[2] / (
+        "checkpoints/run_20260910_0028_-dirty_sl-h4-b1/config.toml"
     )
     loaded = TrainConfig.load(old_cfg)
     assert loaded.model.block.norm == "RMSNorm"
@@ -293,12 +298,104 @@ def test_make_pictures_pixelwise_softmax():
     print("make_pictures pixelwise softmax OK")
 
 
+def test_batcher_seeded_determinism():
+    torch.manual_seed(0)
+    data = torch.randint(0, 256, (10, 8, 8, 3), dtype=torch.uint8)
+    b1 = Batcher(data, 4, seed=123)
+    b2 = Batcher(data, 4, seed=123)
+
+    sx1, t1 = b1.next()
+    sx2, t2 = b2.next()
+    assert torch.equal(sx1, sx2) and torch.equal(t1, t2)
+    assert t1.dtype == torch.float32 and sx1.dtype == torch.int64
+    assert sx1.shape == (4, 64) and t1.shape == (4, 8, 8, 3)
+    assert torch.equal(t1, data[:4].float() / 255.0)
+    assert (sx1 >= 0).all() and (sx1 < 64).all()
+    assert len(set(sx1[0].tolist())) == 64
+
+    sx1, t1 = b1.next()
+    assert torch.equal(t1, data[4:8].float() / 255.0)
+    while b1.next() is not None:
+        pass
+    assert b1.next() is None
+
+    fdata = torch.rand(5, 8, 8, 1)
+    _, t = Batcher(fdata, 2, seed=7).next()
+    assert t.dtype == torch.float32 and torch.equal(t, fdata[:2])
+    print("batcher seeded determinism + uint8 OK")
+
+
+def test_stl10_config_roundtrip():
+    cfg = make_config()
+    cfg.dataset.dataset = "Stl10Unlabeled"
+    cfg.dataset.max_images = 2000
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "config.toml"
+        cfg.save(path)
+        loaded = TrainConfig.load(path)
+        assert loaded.dataset.dataset == "Stl10Unlabeled"
+        assert loaded.dataset.max_images == 2000
+        text = path.read_text()
+        assert 'dataset = "Stl10Unlabeled"' in text
+        assert "max_images = 2000" in text
+    print("stl10 config roundtrip OK")
+
+
+def test_multishard_loader():
+    struct_type = pa.struct([pa.field("bytes", pa.binary()), pa.field("path", pa.string())])
+    with tempfile.TemporaryDirectory() as d:
+        cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            shard_paths = []
+            for shard in range(2):
+                records = []
+                for k in range(3):
+                    arr = np.full((4, 4, 3), 10 * shard + k, dtype=np.uint8)
+                    buf = io.BytesIO()
+                    Image.fromarray(arr).save(buf, format="PNG")
+                    records.append({"bytes": buf.getvalue(), "path": None})
+                path = Path(d) / f"shard{shard}.parquet"
+                pq.write_table(pa.table({"image": pa.array(records, type=struct_type)}), path)
+                shard_paths.append(path)
+
+            dataset.HWC["FakeSharded"] = (4, 4, 3)
+            dataset.IMAGE_COLUMNS["FakeSharded"] = "image"
+            dataset.FILENAMES["FakeSharded"] = "fake"
+            dataset.HF_LINKS[("FakeSharded", True)] = [p.as_uri() for p in shard_paths]
+
+            images = dataset.load_or_download("FakeSharded", True, max_images=4)
+            assert images.shape == (4, 4, 4, 3) and images.dtype == torch.uint8
+            assert images[0, 0, 0, 0].item() == 0 and images[3, 0, 0, 0].item() == 10
+
+            images = dataset.load_or_download("FakeSharded", True, max_images=4)
+            assert images.shape[0] == 4
+
+            images = dataset.load_or_download("FakeSharded", True)
+            assert images.shape == (6, 4, 4, 3)
+            images = dataset.load_or_download("FakeSharded", True)
+            assert images.shape == (6, 4, 4, 3)
+
+            capped = dataset.load_or_download("FakeSharded", True, max_images=5)
+            assert capped.shape[0] == 5
+
+            cfg = dataset.DatasetConfig(max_images=2)
+            cfg.dataset = "FakeSharded"
+            assert dataset.employ(cfg, True).shape[0] == 2
+        finally:
+            os.chdir(cwd)
+    print("multishard loader OK")
+
+
 if __name__ == "__main__":
     test_newton_schulz()
     test_flat_to_2d()
     test_make_pictures_pixelwise_softmax()
     test_lr_schedule_quirk()
     test_toml_roundtrip()
+    test_stl10_config_roundtrip()
+    test_batcher_seeded_determinism()
+    test_multishard_loader()
     test_forward_backward()
     test_attentive_residual()
     test_layernorm_variant()

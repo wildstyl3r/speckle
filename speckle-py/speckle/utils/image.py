@@ -38,6 +38,9 @@ def visualize_generation(visualization_classes, batcher, m):
         if batch is None:
             raise RuntimeError("visualization batcher is exhausted")
         sx, target = batch
+        device = next(m.parameters()).device
+        sx = sx.to(device)
+        target = target.to(device)
         b, h, w, c = target.shape
         sx = sx[:, : sum(visualization_classes)]
         n = sx.shape[1]
@@ -83,13 +86,12 @@ def visualize_generation(visualization_classes, batcher, m):
 
 def visualize_source_points(images: torch.Tensor, sample_idx: int, source_points: int) -> Image.Image:
     single_img = images[sample_idx]
+    if single_img.dtype == torch.uint8:
+        single_img = single_img.float()
+    else:
+        single_img = single_img * 255.0
     h, w, c = single_img.shape
     class_ix = torch.randint(100000, (h * w,)).argsort(-1)
     source_ix = class_ix[:source_points]
-    mask = (
-        torch.zeros(h * w, c)
-        .scatter(0, source_ix.unsqueeze(-1).expand(-1, c), 1)
-        .eq(1)
-        .view(h, w, c)
-    )
-    return tensor_to_rgba(single_img * 255.0, mask)
+    mask = torch.zeros(h * w).scatter(0, source_ix, 1).eq(1).view(h, w)
+    return tensor_to_rgba(single_img, mask)
